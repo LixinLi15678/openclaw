@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { resolveChunkMode, resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
@@ -6,6 +7,7 @@ import {
 } from "../../auto-reply/reply-payload.js";
 // Finalizes outbound modifying policy before durable queue custody is created.
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
 import { splitMediaFromOutput } from "../../media/parse.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { HookRunner } from "../../plugins/hooks.js";
@@ -28,6 +30,7 @@ import {
 } from "./prepared-batch.js";
 import type { OutboundPayloadPlan } from "./reply-payload-parts.js";
 import { createReplyToDeliveryPolicy, normalizeOutboundReplyFacts } from "./reply-policy.js";
+import { captureTextSuffix } from "./text-suffix.js";
 
 class OutboundPayloadPreparationError extends Error {
   readonly sourceIndex: number;
@@ -153,6 +156,39 @@ async function prepareOutboundPlan(
   structuredPlan: readonly OutboundPayloadPlan[] | undefined,
   options?: OutboundPayloadPreparationOptions,
 ): Promise<PreparedOutboundBatch> {
+  const textPreparation = params.cfg.messages?.outboundTextSuffix
+    ? {
+        suffix: captureTextSuffix(params.cfg, params.textAuthor),
+        modifiersPrepared: true,
+        visibility: "visible" as const,
+      }
+    : undefined;
+  const formatting =
+    textPreparation?.suffix.decision === "scoped" &&
+    (params.channel === "whatsapp" || params.channel === "openclaw-weixin")
+      ? {
+          ...params.formatting,
+          textLimit: Math.min(
+            params.formatting?.textLimit && params.formatting.textLimit > 0
+              ? params.formatting.textLimit
+              : Infinity,
+            resolveTextChunkLimit(params.cfg, params.channel, params.accountId, {
+              fallbackLimit: 4_000,
+            }),
+            params.channel === "whatsapp" ? 4_096 : 4_000,
+          ),
+          chunkMode:
+            params.formatting?.chunkMode ??
+            resolveChunkMode(params.cfg, params.channel, params.accountId),
+          tableMode:
+            params.formatting?.tableMode ??
+            resolveMarkdownTableMode({
+              cfg: params.cfg,
+              channel: params.channel,
+              accountId: params.accountId,
+            }),
+        }
+      : undefined;
   const handler = await createChannelHandler(
     resolveChannelHandlerParams(params, normalizeOutboundReplyFacts(params), []),
   );
@@ -282,10 +318,13 @@ async function prepareOutboundPlan(
   }
 
   const runId = params.runId ?? params.replyPayloadSendingHook?.runId;
+
   return {
     schemaVersion: PREPARED_OUTBOUND_BATCH_SCHEMA_VERSION,
     sourcePayloadCount: params.payloads.length,
     channelNormalized: true,
+    ...(textPreparation ? { textPreparation } : {}),
+    ...(formatting ? { formatting } : {}),
     ...(runId ? { runId } : {}),
     ...(params.executionIdentityToken
       ? { executionIdentityToken: params.executionIdentityToken }

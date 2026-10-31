@@ -1,7 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
+import type {
+  BoundTextSuffix,
+  OutboundTextSuffixRuntimeV1,
+} from "openclaw/plugin-sdk/channel-contract";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -12,7 +17,11 @@ import {
   renderMarkdownWithMarkers,
   sliceMarkdownIR,
 } from "openclaw/plugin-sdk/text-chunking";
-import { CONFIG_DIR, resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
+import {
+  CONFIG_DIR,
+  resolveUserPath,
+  findGraphemeChunkEnd,
+} from "openclaw/plugin-sdk/text-utility-runtime";
 
 const WHATSAPP_FORMAT_CAPABILITIES = FormatCapabilityProfile.define({
   mechanism: "markdown",
@@ -334,14 +343,23 @@ function renderWhatsAppMarkdownIR(
   );
 }
 
-function prepareWhatsAppMarkdown(text: string, tableMode: MarkdownTableMode) {
+function prepareWhatsAppMarkdown(
+  text: string,
+  tableMode: MarkdownTableMode,
+  literalOwnership = false,
+) {
   // Some outbound callers preserve leading indentation as presentation, while
   // CommonMark consumes it as block indentation. Guard only the parse.
   const guardedIndent = /^[\t ]/u.test(text);
   const escaped = protectWhatsAppEscapedMarkers(text);
   const markdown = guardedIndent ? `${WHATSAPP_INDENT_GUARD}${escaped.text}` : escaped.text;
   const trailingWhitespace = text.match(/\s+$/u)?.[0] ?? "";
-  const { ir: parsedIr, hasTables } = markdownToIRWithMeta(markdown, {
+  const {
+    ir: parsedIr,
+    hasTables,
+    protectedTextEnd,
+  } = markdownToIRWithMeta(markdown, {
+    literalOwnership,
     linkify: false,
     autolink: false,
     enableSpoilers: true,
@@ -359,7 +377,14 @@ function prepareWhatsAppMarkdown(text: string, tableMode: MarkdownTableMode) {
   if (!hasTables && trailingWhitespace) {
     ir.text = `${ir.text.trimEnd()}${trailingWhitespace}`;
   }
-  return { ir, escapedMarkers: escaped.markers };
+  return {
+    ir,
+    escapedMarkers: escaped.markers,
+    protectedTextEnd: Math.max(
+      0,
+      (protectedTextEnd ?? 0) - (guardedIndent ? WHATSAPP_INDENT_GUARD.length : 0),
+    ),
+  };
 }
 
 function splitWhatsAppIRForChunkMode(
@@ -418,4 +443,109 @@ export function markdownToWhatsAppChunks(
 
 export function markdownToWhatsApp(text: string, tableMode: MarkdownTableMode = "bullets"): string {
   return markdownToWhatsAppChunks(text, Number.POSITIVE_INFINITY, tableMode).join("");
+}
+
+/** The existing IR renderer owns terminal prose classification and complete request budgeting. */
+export function markdownToWhatsAppSuffixChunks(params: {
+  text: string;
+  limit: number;
+  tableMode: MarkdownTableMode;
+  chunkMode: ChunkMode;
+  suffix: BoundTextSuffix;
+  runtime: OutboundTextSuffixRuntimeV1;
+  /** Selected generated warning, appended after the logical body signature edit. */
+  appendPlainText?: string;
+}): string[] {
+  if (!params.text.trim() && !params.appendPlainText?.trim()) {
+    return [];
+  }
+  const prepared = prepareWhatsAppMarkdown(params.text, params.tableMode, true);
+  let ir = prepared.ir;
+  const tailStart = Math.max(
+    prepared.protectedTextEnd,
+    ...ir.styles
+      .filter((span) => span.style === "code" || span.style === "code_block")
+      .map((span) => span.end),
+    ...ir.links.map((span) => span.end),
+  );
+  const normalized = params.runtime.normalizeTerminalSignature(
+    ir.text.slice(tailStart),
+    params.suffix,
+  );
+  if (normalized.hadSignature) {
+    ir = sliceMarkdownIR(ir, 0, tailStart + normalized.keepEnd);
+  }
+  if (params.appendPlainText) {
+    ir = { ...ir, text: ir.text + (ir.text ? "\n" : "") + params.appendPlainText };
+  }
+  if (!ir.text.trim()) {
+    if (!normalized.hadSignature) {
+      return [];
+    }
+    const finalized = params.runtime.finalize({ state: "signature-only" }, params.suffix);
+    if (finalized.text.length > params.limit) {
+      throw new PlatformMessageNotDispatchedError("Suffix exceeds the WhatsApp local text limit", {
+        cause: undefined,
+        retryable: false,
+      });
+    }
+    return [finalized.text];
+  }
+
+  const render = (chunk: MarkdownIR) => {
+    const body = renderWhatsAppMarkdownIR(chunk, prepared.escapedMarkers);
+    if (!body.trim()) {
+      return "";
+    }
+    const codeBlock = chunk.styles.some(
+      (span) => span.style === "code_block" && span.end === chunk.text.length,
+    );
+    const block =
+      chunk.listItems?.length ||
+      chunk.styles.some((span) => span.style === "blockquote" || span.style.startsWith("heading"));
+    return params.runtime.finalize(
+      {
+        state: "body",
+        text: body,
+        separator: block ? "blank-line" : codeBlock ? "newline" : "space",
+      },
+      params.suffix,
+    ).text;
+  };
+  // The shared renderer's legacy progress fallback can split an oversized grapheme.
+  // A matched plan must reject that indivisible input before any provider request.
+  for (let start = 0; start < ir.text.length;) {
+    let end = start + 1;
+    let next = start;
+    while (
+      end <= ir.text.length &&
+      (next = findGraphemeChunkEnd(ir.text, start, end, undefined, false)) === start
+    ) {
+      end += 1;
+    }
+    if (next === start || render(sliceMarkdownIR(ir, start, next)).length > params.limit) {
+      throw new PlatformMessageNotDispatchedError(
+        "A WhatsApp grapheme cannot fit with formatting and suffix",
+        { cause: undefined, retryable: false },
+      );
+    }
+    start = next;
+  }
+  const chunks = splitWhatsAppIRForChunkMode(ir, params.limit, params.chunkMode).flatMap((source) =>
+    renderMarkdownIRChunksWithinLimit({
+      ir: source,
+      limit: params.limit,
+      renderChunk: render,
+      measureRendered: (value) => value.length,
+    })
+      .map((chunk) => chunk.rendered)
+      .filter(Boolean),
+  );
+  if (chunks.some((chunk) => !chunk.trim() || chunk.length > params.limit)) {
+    throw new PlatformMessageNotDispatchedError(
+      "WhatsApp text cannot fit the local limit with formatting and suffix",
+      { cause: undefined, retryable: false },
+    );
+  }
+  return chunks;
 }

@@ -126,6 +126,7 @@ it.for([
         const send = durableMessages.sendDurableMessageBatchCore;
         vi.spyOn(durableMessages, "sendDurableMessageBatchCore").mockImplementationOnce(
           async (...args) => {
+            expect(args[0].textAuthor).toEqual({ kind: "agent", agentId: "main" });
             const result = await send(...args);
             expect(result.status).toBe("sent");
             entered.resolve();

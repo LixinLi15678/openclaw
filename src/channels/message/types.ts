@@ -162,6 +162,11 @@ export type ChannelMessageSendTextContext<TConfig = OpenClawConfig> = {
   cfg: TConfig;
   to: string;
   text: string;
+  /** Captured host policy plus the optional pure V1 planner; functions are never queued. */
+  textPreparation?: import("../../infra/outbound/text-suffix.types.js").OutboundTextPreparation;
+  /** Effective captured formatter; consume only after binding the optional policy to the actual route. */
+  textFormatting?: import("../../infra/outbound/formatting.js").OutboundDeliveryFormattingOptions;
+  outboundTextSuffix?: import("../../infra/outbound/text-suffix.types.js").OutboundTextSuffixRuntimeV1;
   accountId?: string | null;
   deps?: OutboundSendDeps;
   replyToId?: string | null;

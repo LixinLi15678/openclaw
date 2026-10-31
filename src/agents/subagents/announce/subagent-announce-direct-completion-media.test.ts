@@ -33,6 +33,7 @@ async function deliver(params: {
   payloads?: Record<string, unknown>[];
   sendMessage?: SendMessage;
   onDeliveryResult?: Parameters<typeof deliverSubagentAnnouncement>[0]["onDeliveryResult"];
+  requesterAgentId?: string;
 }) {
   const sendMessage = params.sendMessage ?? vi.fn<SendMessage>(async () => sent);
   const queue = vi.fn((sessionId: string) => ({
@@ -57,6 +58,7 @@ async function deliver(params: {
   const childSessionKey = "agent:worker:subagent:media-child";
   const result = await deliverSubagentAnnouncement({
     requesterSessionKey: "agent:main:discord:dm:U123",
+    requesterAgentId: params.requesterAgentId,
     targetRequesterSessionKey: "agent:main:discord:dm:U123",
     triggerMessage: "child done",
     requesterSessionOrigin: origin,
@@ -87,6 +89,20 @@ afterEach(() => {
 });
 
 describe("subagent completion media after requester wake failure", () => {
+  it.each([undefined, "main"])(
+    "attributes external publication only to explicit requester %s",
+    async (requesterAgentId) => {
+      const { sendMessage } = await deliver({
+        event: { mediaUrls: [image] },
+        requesterAgentId,
+      });
+      expect(sendMessage).toHaveBeenCalledOnce();
+      expect(mockCallArg(sendMessage).textAuthor).toEqual(
+        requesterAgentId ? { kind: "agent", agentId: requesterAgentId } : undefined,
+      );
+    },
+  );
+
   it.each<{
     name: string;
     event?: Partial<AgentInternalEvent>;

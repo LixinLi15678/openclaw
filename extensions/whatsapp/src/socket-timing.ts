@@ -23,8 +23,16 @@ export type WhatsAppSocketOperationAdapter = {
     jid: string,
     content: AnyMessageContent,
     options?: MiscMessageGenerationOptions,
+    authority?: WhatsAppSendAuthority,
   ) => Promise<WAMessage | undefined>;
   sendPresenceUpdate: (presence: WAPresence, jid?: string) => Promise<unknown>;
+};
+
+/** Existing caller authority travels through socket queues without entering provider options. */
+export type WhatsAppSendAuthority = {
+  signal?: AbortSignal;
+  onPlatformSendDispatch?: () => Promise<void>;
+  assertDirectAdapterHandoff?: () => void;
 };
 
 type WhatsAppSocketOperationTimeoutHooks = {
@@ -120,17 +128,28 @@ export function createWhatsAppSocketOperationTimeoutAdapter(
     operation: keyof WhatsAppSocketOperationAdapter,
     send: () => Promise<T>,
     onTimeout?: (promise: Promise<T>) => void,
+    authority?: WhatsAppSendAuthority,
   ) => {
     const effect = captureEffectAuthority();
     const run = () => {
       let active = true;
-      const promise = effect.initiate(() => {
-        if (!active) {
-          throw new WhatsAppSocketOperationTimeoutError(operation, operationTimeoutMs);
-        }
-        hooks?.assertCurrent?.();
-        return send();
-      });
+      const initiate = () =>
+        effect.initiate(() => {
+          if (!active) {
+            throw new WhatsAppSocketOperationTimeoutError(operation, operationTimeoutMs);
+          }
+          hooks?.assertCurrent?.();
+          authority?.signal?.throwIfAborted();
+          authority?.assertDirectAdapterHandoff?.();
+          return send();
+        });
+      const promise = authority?.onPlatformSendDispatch
+        ? (async () => {
+            authority.signal?.throwIfAborted();
+            await authority.onPlatformSendDispatch?.();
+            return initiate();
+          })()
+        : initiate();
       return withWhatsAppSocketOperationTimeout(operation, promise, operationTimeoutMs, () => {
         active = false;
         onTimeout?.(promise);
@@ -139,11 +158,12 @@ export function createWhatsAppSocketOperationTimeoutAdapter(
     return operation === "sendMessage" ? runSerializedSocketSendMessage(sock, run) : run();
   };
   return {
-    sendMessage: (jid, content, options) =>
+    sendMessage: (jid, content, options, authority) =>
       runOperation(
         "sendMessage",
         () => (options ? sock.sendMessage(jid, content, options) : sock.sendMessage(jid, content)),
         (promise) => hooks?.onSendMessageTimeout?.({ jid, promise }),
+        authority,
       ),
     sendPresenceUpdate: (presence, jid) =>
       runOperation("sendPresenceUpdate", () =>

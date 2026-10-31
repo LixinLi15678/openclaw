@@ -53,6 +53,7 @@ type SendDurableMessageBatchRequest = {
   gatewayClientScopes?: readonly string[];
   runId?: string;
   executionIdentityToken?: unknown;
+  textAuthor?: { kind: "agent"; agentId: string } | { kind: "system" };
 };
 
 type DeliverySupportRequest = {
@@ -107,6 +108,29 @@ describe("durable inbound reply delivery", () => {
     mocks.sendDurableMessageBatch.mockResolvedValue(result);
     mocks.sendStructuredDurableMessageBatch.mockResolvedValue(result);
   });
+
+  it.each(["final", "block"] as const)(
+    "keeps the %s reply at its owning delivery boundary",
+    async (kind) => {
+      const result = await deliverInboundReplyWithMessageSendContextCore({
+        cfg: {},
+        channel: "whatsapp",
+        agentId: "main",
+        info: { kind },
+        payload: { text: "fixture reply" },
+        ctxPayload: ctxPayload({ OriginatingTo: "+15550001111" }),
+      });
+      if (kind === "block") {
+        expect(result).toEqual({ status: "not_applicable", reason: "non_final" });
+        expect(mocks.sendDurableMessageBatch).not.toHaveBeenCalled();
+        return;
+      }
+      expect(latestSendDurableMessageBatchRequest().textAuthor).toEqual({
+        kind: "agent",
+        agentId: "main",
+      });
+    },
+  );
 
   it.each([
     { mode: "first", raw: false },

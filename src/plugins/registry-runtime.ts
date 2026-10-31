@@ -23,6 +23,7 @@ import {
 } from "./registry-lifecycle.js";
 import { createRegisteredChannelRuntimeResolver } from "./registry-runtime-channel.js";
 import type { PluginRegistryState } from "./registry-state.js";
+import { guardRegistryTextSuffix } from "./registry-text-suffix.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 import {
   ExpiredPluginRegistryScopeError,
@@ -358,6 +359,11 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
           } satisfies PluginRuntime["channel"]["inbound"];
           const value = {
             ...channel,
+            ...guardRegistryTextSuffix(
+              channel.outboundTextSuffix,
+              assertRuntimeCurrent,
+              invokeSelectedRuntime,
+            ),
             inbound,
             turn: inbound,
             outbound: {

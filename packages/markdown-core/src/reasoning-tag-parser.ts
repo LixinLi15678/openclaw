@@ -1,8 +1,20 @@
 // Markdown Core owns provider-tag scanning and CommonMark/GFM ownership.
 import { expectDefined } from "@openclaw/normalization-core";
 import { fromMarkdown, type Extension, type Handle } from "mdast-util-from-markdown";
+import { gfmStrikethroughFromMarkdown } from "mdast-util-gfm-strikethrough";
 import { gfmTableFromMarkdown } from "mdast-util-gfm-table";
+import { gfmStrikethrough } from "micromark-extension-gfm-strikethrough";
 import { gfmTable } from "micromark-extension-gfm-table";
+import type {
+  MarkdownIndentedSource,
+  MarkdownOwnershipOptions,
+  PositionedMarkdownNode,
+} from "./reasoning-tag-parser.types.js";
+
+export type {
+  MarkdownIndentedSource,
+  PositionedMarkdownNode,
+} from "./reasoning-tag-parser.types.js";
 
 export type ReasoningTagTextDelta =
   | { kind: "text"; text: string }
@@ -186,15 +198,7 @@ export function findNextLineEnding(text: string, start: number): number {
   return lineFeed === -1 ? carriageReturn : Math.min(carriageReturn, lineFeed);
 }
 
-type PositionedNode = {
-  type?: string;
-  value?: string;
-  position?: {
-    start?: { offset?: number; line?: number };
-    end?: { offset?: number; line?: number };
-  };
-  children?: PositionedNode[];
-};
+type PositionedNode = PositionedMarkdownNode;
 
 type MarkdownCodeRegion = {
   start: number;
@@ -202,6 +206,7 @@ type MarkdownCodeRegion = {
   block: boolean;
   source?: MarkdownInlineSource;
   indentedSource?: MarkdownIndentedSource;
+  flowSource?: MarkdownIndentedSource;
 };
 
 type MarkdownCompletedParagraph = {
@@ -214,22 +219,6 @@ type MarkdownInlineSource = {
   prefix: { start: number; end: number; text: string; ownerStart: number };
   value: string;
   offsets: number[];
-};
-
-export type MarkdownIndentedSource = {
-  value: string;
-  offsets: number[];
-  /** Source framing before the first content token, including its owning containers. */
-  context: string;
-  ownerStart: number;
-  nested: boolean;
-};
-
-type MarkdownOwnershipOptions = {
-  includeSource?: boolean;
-  includeIndentedSource?: boolean;
-  includeText?: boolean;
-  syntax?: "commonmark" | "gfm";
 };
 
 function appendMarkdownSource(
@@ -306,14 +295,29 @@ function captureIndentedSources(
   text: string,
   sources: Map<number, MarkdownIndentedSource>,
   observeInlineLineEnding?: Handle,
+  includeFenced = false,
 ): Extension {
   const observe: Handle = function (token) {
-    if (!this.tokenStack.some(([parent]) => parent.type === "codeIndented")) {
+    if (
+      !this.tokenStack.some(
+        ([parent]) =>
+          parent.type === "codeIndented" || (includeFenced && parent.type === "codeFenced"),
+      )
+    ) {
       return;
     }
     const node = this.stack.findLast((entry) => entry.type === "code");
     const start = node?.position?.start.offset;
     if (start === undefined) {
+      return;
+    }
+    if (
+      includeFenced &&
+      token.type === "lineEnding" &&
+      !sources.has(start) &&
+      this.tokenStack.some(([parent]) => parent.type === "codeFenced") &&
+      !/[\r\n]/u.test(text.slice(start, token.start.offset))
+    ) {
       return;
     }
     let source = sources.get(start);
@@ -329,6 +333,13 @@ function captureIndentedSources(
         nested: owner !== undefined,
       };
       sources.set(start, source);
+    }
+    if (includeFenced) {
+      (source.segments ??= []).push({
+        start: token.start.offset,
+        end: token.end.offset,
+        value: this.sliceSerialize(token),
+      });
     }
     appendMarkdownSource(source, start, token, this.sliceSerialize(token));
   };
@@ -357,23 +368,40 @@ export function parseMarkdownOwnership(text: string, options?: MarkdownOwnership
       retainStart: 0,
       completedParagraphs: [],
       ...(paragraphs ? { paragraphs } : {}),
+      ...(options?.includeStructure
+        ? { structure: { type: "root", children: [] } satisfies PositionedNode }
+        : {}),
     };
   }
   const sources = new Map<number, MarkdownInlineSource>();
-  const indentedSources = options?.includeIndentedSource
-    ? new Map<number, MarkdownIndentedSource>()
-    : undefined;
-  const inlineSourceExtension = options?.includeSource
-    ? captureInlineSources(text, sources)
-    : undefined;
+  const indentedSources =
+    options?.includeIndentedSource || options?.includeStructure
+      ? new Map<number, MarkdownIndentedSource>()
+      : undefined;
+  const inlineSourceExtension =
+    options?.includeSource || options?.includeStructure
+      ? captureInlineSources(text, sources)
+      : undefined;
   const tables = options?.syntax !== "commonmark";
   const tree = fromMarkdown(text, {
-    extensions: [DISABLE_HTML_MARKDOWN, ...(tables ? [gfmTable()] : [])],
+    extensions: [
+      DISABLE_HTML_MARKDOWN,
+      ...(tables ? [gfmTable()] : []),
+      ...(options?.includeStructure ? [gfmStrikethrough({ singleTilde: false })] : []),
+    ],
     mdastExtensions: [
       ...(tables ? [gfmTableFromMarkdown()] : []),
+      ...(options?.includeStructure ? [gfmStrikethroughFromMarkdown()] : []),
       ...(inlineSourceExtension ? [inlineSourceExtension] : []),
       ...(indentedSources
-        ? [captureIndentedSources(text, indentedSources, inlineSourceExtension?.enter?.lineEnding)]
+        ? [
+            captureIndentedSources(
+              text,
+              indentedSources,
+              inlineSourceExtension?.enter?.lineEnding,
+              options?.includeStructure,
+            ),
+          ]
         : []),
     ],
   }) as PositionedNode;
@@ -441,6 +469,10 @@ export function parseMarkdownOwnership(text: string, options?: MarkdownOwnership
           }
         }
         const indentedSource = indentedSources?.get(start);
+        const flowSource =
+          options?.includeStructure && indentedSource
+            ? { ...indentedSource, offsets: [...indentedSource.offsets] }
+            : undefined;
         if (indentedSource) {
           indentedSource.value = node.value ?? "";
           while (indentedSource.offsets.length <= end - start) {
@@ -455,7 +487,12 @@ export function parseMarkdownOwnership(text: string, options?: MarkdownOwnership
           end,
           block: node.type === "code",
           ...(source ? { source } : {}),
-          ...(indentedSource ? { indentedSource } : {}),
+          ...(indentedSource
+            ? {
+                indentedSource,
+                ...(flowSource ? { flowSource } : {}),
+              }
+            : {}),
         });
       }
       for (const child of node.children?.toReversed() ?? []) {
@@ -471,6 +508,7 @@ export function parseMarkdownOwnership(text: string, options?: MarkdownOwnership
     retainStart: tree.children?.at(-1)?.position?.start?.offset ?? text.length,
     completedParagraphs,
     ...(paragraphs ? { paragraphs } : {}),
+    ...(options?.includeStructure ? { structure: tree } : {}),
   };
 }
 

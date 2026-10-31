@@ -49,6 +49,8 @@ type RuntimeThreadBindingLifecycleRecord =
     };
 
 export type PluginRuntimeChannel = {
+  /** Optional pure policy/planner capability; not send or route authority. */
+  outboundTextSuffix?: import("../../infra/outbound/text-suffix.types.js").OutboundTextSuffixRuntimeV1;
   text: {
     chunkByNewline: typeof import("../../auto-reply/chunk.js").chunkByNewline;
     chunkMarkdownText: typeof import("../../auto-reply/chunk.js").chunkMarkdownText;

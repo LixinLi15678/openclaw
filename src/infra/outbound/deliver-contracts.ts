@@ -142,6 +142,8 @@ export type ChannelHandler = {
 };
 
 type OutboundChannelContext = {
+  textFormatting?: OutboundDeliveryFormattingOptions;
+  textPreparation?: import("./text-suffix.types.js").OutboundTextPreparation;
   cfg: OpenClawConfig;
   channel: string;
   to: string;
@@ -185,6 +187,8 @@ export type ChannelHandlerParams = OutboundChannelContext & {
 
 export type DeliverOutboundPayloadsCoreParams = OutboundChannelContext & {
   payloads: ReplyPayload[];
+  /** Explicit admitted publishing execution, not session/display/media identity. */
+  textAuthor?: import("./text-suffix.types.js").OutboundTextAuthor;
   /** Admitted run correlation copied into the prepared durable batch. */
   runId?: string;
   /** @internal Exact admitted execution provenance copied into durable custody. */

@@ -667,6 +667,8 @@ export type ChannelDirectoryEntry = {
 
 /** Execution context passed to channel-owned actions on the shared `message` tool. */
 export type ChannelMessageActionContext = {
+  textPreparation?: import("../../infra/outbound/text-suffix.types.js").OutboundTextPreparation;
+  outboundTextSuffix?: import("../../infra/outbound/text-suffix.types.js").OutboundTextSuffixRuntimeV1;
   channel: ChannelId;
   action: ChannelMessageActionName;
   cfg: OpenClawConfig;

@@ -1,4 +1,6 @@
+import { isValidAgentId, normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { z } from "zod";
+import { normalizeOptionalAccountId } from "../routing/account-id.js";
 
 const VisibleRepliesSchema = z
   .union([z.enum(["automatic", "message_tool"]), z.boolean()])
@@ -68,10 +70,72 @@ export const ProviderCommandsSchema = z
 
 const ResponseUsageModeSchema = z.enum(["on", "off", "tokens", "full"]);
 
+const ExactSuffixIdentifierSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(256)
+  .refine(
+    (value) => !/[\s*?\\[\]{}^$|()]/u.test(value),
+    "Use an exact identifier, without wildcards, patterns or whitespace.",
+  );
+export const OutboundTextSuffixSchema = z
+  .strictObject({
+    enabled: z.boolean().default(false),
+    text: z
+      .string()
+      .min(1)
+      .refine(
+        (value) =>
+          value.trim().length > 0 &&
+          Array.from(value).length <= 32 &&
+          Buffer.byteLength(value, "utf8") <= 128 &&
+          !/[\p{Cc}\p{Cf}\p{Cs}\u202A-\u202E\u2066-\u2069*_~`[\]<>#|\\]/u.test(value),
+        "Use a nonblank, single-line literal suffix (at most 32 Unicode scalars / 128 UTF-8 bytes), without controls or markup.",
+      )
+      .refine((value) => !/[\r\n\u2028\u2029]/u.test(value), "Suffix must be single-line."),
+    agentId: ExactSuffixIdentifierSchema.refine(
+      isValidAgentId,
+      "Use a valid agent identifier.",
+    ).overwrite(normalizeAgentId),
+    targets: z
+      .array(
+        z.strictObject({
+          channel: z.enum(["whatsapp", "openclaw-weixin"]),
+          accountId: ExactSuffixIdentifierSchema.refine(
+            (value) => normalizeOptionalAccountId(value) !== undefined,
+            "Use a valid account identifier.",
+          ).overwrite((value) => normalizeOptionalAccountId(value) ?? value),
+          peer: z.strictObject({ kind: z.literal("direct"), id: ExactSuffixIdentifierSchema }),
+        }),
+      )
+      .max(32),
+  })
+  .superRefine((value, ctx) => {
+    if (value.enabled && value.targets.length === 0) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["targets"],
+        message: "An enabled suffix requires an exact direct target.",
+      });
+    }
+    const keys = value.targets.map((target) =>
+      JSON.stringify([target.channel, target.accountId, target.peer.id]),
+    );
+    if (new Set(keys).size !== keys.length) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["targets"],
+        message: "Suffix targets must be unique.",
+      });
+    }
+  });
+
 export const MessagesSchema = z
   .strictObject({
     visibleReplies: VisibleRepliesSchema.optional(),
     responsePrefix: z.string().optional(),
+    outboundTextSuffix: OutboundTextSuffixSchema.optional(),
     usageTemplate: z.union([z.string(), z.record(z.string(), z.unknown())]).optional(),
     responseUsage: z
       .union([ResponseUsageModeSchema, z.record(z.string(), ResponseUsageModeSchema)])

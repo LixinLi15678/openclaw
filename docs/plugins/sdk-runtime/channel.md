@@ -219,3 +219,52 @@ use the shared-state worker. Their released synchronous selectors remain availab
 through the compatibility boundary. Separate lifecycle setters and other bundled
 stores retain their existing behavior until their respective cutovers; this
 execution change does not strengthen their durability contracts.
+
+## Outgoing text suffix V1
+
+Hosts advertise `outbound-text-suffix-v1` in the optional
+`api.runtime.capabilities` list. The per-call
+`api.runtime.channel.outboundTextSuffix?.version === 1` namespace is the actual
+availability signal. It provides pure `capture`, `bind`,
+`normalizeTerminalSignature`, `finalize`, and `planPreservedMarkdownText` operations.
+Types are exported from `openclaw/plugin-sdk/channel-contract`.
+
+`capture(cfg, author)` takes an explicit admitted execution identity. `bind(snapshot,
+actualRoute)` matches the actual resolved direct channel/account/peer. Neither
+operation grants send authority or performs routing/configuration I/O. Missing
+legacy snapshots do not read live policy. Unsupported captured applicable revisions
+fail before dispatch. Coverage counters retain reason codes only, without content
+or identifiers.
+
+Adopting adapters declare `outboundTextSuffix: "suffix-v1"`. Core supplies optional
+`textPreparation`, `textFormatting` and `outboundTextSuffix` on modern and legacy
+send contexts. `textPreparation.modifiersPrepared` records completed host modifiers;
+only an actual bound policy may use it to skip a duplicate mutable hook stage.
+`textFormatting` projects the effective formatter stored in the existing prepared
+batch. Consume it only after binding; unmatched sends retain their ordinary
+`formatting` hints and behavior. No function is serialized into delivery custody.
+
+The formatter classifies the complete logical prose tail and applies
+`normalizeTerminalSignature` once before splitting. Protected code/link/table data
+is not an eligible tail. `finalize` only appends to a closed physical body and never
+strips its final characters. It accepts an explicit finalized value unchanged under
+the same captured identity; it rejects a different identity. A body moon at a source
+cut is retained in addition to the external signature. Empty bodies produce no
+units; `signature-only` is reserved for an explicitly supplied logical signature.
+
+`planPreservedMarkdownText` is an asynchronous module-loading facade over the pure,
+synchronous Markdown Core source planner. Await the entire immutable plan before
+any provider I/O. It preserves fitting source, supports emphasis/strong/double-tilde
+strike and code continuation framing, and counts full body/framing/separator/suffix
+size. It rejects unrepresentable indivisible input before dispatch. Existing parser
+consumers do not opt into this grammar. No filter, hook or visible rewrite may follow
+finalization. Revalidate cancellation and existing live authority after awaited
+preparation and immediately before every physical request, including after progress
+observers. Capture accepted results before observers and retain standard partial
+receipts on subsequent failure; policy snapshots are not dispatch authority.
+
+Third-party plugins supporting older SDKs may use a minimal optional structural
+view of these public V1 values, with no new import absent from their old SDK. Check
+host capability IDs and callable availability; do not inspect private host fields
+or use product-version equality. Hosts without the capability and channels without
+adoption preserve existing behavior.

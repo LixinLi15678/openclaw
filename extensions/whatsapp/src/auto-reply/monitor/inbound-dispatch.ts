@@ -1,6 +1,7 @@
 import type { StatusReactionController } from "openclaw/plugin-sdk/channel-feedback";
 import {
   buildChannelInboundEventContext,
+  getGroupThreadDeliverySession,
   type BuildChannelInboundEventContextParams,
   toLocationContext,
   createChannelPartialDeliveryError,
@@ -30,6 +31,7 @@ import {
   normalizeWhatsAppPayloadTextPreservingIndentation,
 } from "../../outbound-media-contract.js";
 import { newConnectionId } from "../../reconnect.js";
+import { getWhatsAppRuntime } from "../../runtime.js";
 import type {
   deliverWebReply,
   WhatsAppReplyDeliveryResult,
@@ -85,7 +87,11 @@ type WhatsAppInboundTransportContext = WhatsAppReplyTransportContext & {
   sendComposing: AdmittedWebInboundMessage["platform"]["sendComposing"];
 };
 
-type ReplyDeliveryInfo = { kind: ReplyDispatchKind };
+type ReplyDeliveryInfo = {
+  kind: ReplyDispatchKind;
+  onPlatformSendDispatch?: () => Promise<void>;
+  assertPlatformSendAuthorized?: () => void;
+};
 
 type PendingWhatsAppMediaOnlyPayload = {
   info: ReplyDeliveryInfo;
@@ -552,6 +558,20 @@ export function createWhatsAppReplyPlan(params: {
   const conversationId = params.conversationId;
   const statusReactionController = params.statusReactionController ?? null;
   const textLimit = resolveTextChunkLimit(params.cfg, "whatsapp");
+  const suffixRuntime = params.cfg.messages?.outboundTextSuffix
+    ? getWhatsAppRuntime().channel.outboundTextSuffix
+    : undefined;
+  const textPreparation =
+    suffixRuntime && params.cfg.messages?.outboundTextSuffix
+      ? {
+          suffix: suffixRuntime.capture(params.cfg, {
+            kind: "agent",
+            agentId: params.route.agentId,
+          }),
+          modifiersPrepared: false,
+          visibility: "visible" as const,
+        }
+      : undefined;
   const chunkMode = resolveChunkMode(params.cfg, "whatsapp", params.route.accountId);
   const tableMode = resolveMarkdownTableMode({
     cfg: params.cfg,
@@ -594,6 +614,35 @@ export function createWhatsAppReplyPlan(params: {
         replyResult: normalizedDeliveryPayload,
         normalizedReplyResult: normalizedDeliveryPayload,
         transport: params.transport,
+        ...(textPreparation && suffixRuntime
+          ? {
+              textPreparation:
+                getGroupThreadDeliverySession()?.agentId &&
+                getGroupThreadDeliverySession()?.agentId !== params.route.agentId
+                  ? {
+                      ...textPreparation,
+                      suffix: suffixRuntime.capture(params.cfg, {
+                        kind: "agent",
+                        agentId: getGroupThreadDeliverySession()?.agentId ?? params.route.agentId,
+                      }),
+                    }
+                  : textPreparation,
+              outboundTextSuffix: suffixRuntime,
+              textFormatting: {
+                textLimit: Math.min(
+                  4_096,
+                  resolveTextChunkLimit(params.cfg, "whatsapp", params.route.accountId, {
+                    fallbackLimit: 4_000,
+                  }),
+                ),
+                chunkMode,
+                tableMode,
+              },
+            }
+          : {}),
+        signal: params.turnAdoptionLifecycle?.abortSignal,
+        onPlatformSendDispatch: info.onPlatformSendDispatch,
+        assertDirectAdapterHandoff: info.assertPlatformSendAuthorized,
         mediaLocalRoots,
         maxMediaBytes: params.maxMediaBytes,
         textLimit,
@@ -709,7 +758,7 @@ export function createWhatsAppReplyPlan(params: {
         },
       };
     },
-    deliver: async (payload: ReplyPayload, info: { kind: ReplyDispatchKind }) => {
+    deliver: async (payload: ReplyPayload, info: ReplyDeliveryInfo) => {
       const normalizedDeliveryPayload = payload as DeliverableWhatsAppOutboundPayload<ReplyPayload>;
       const reply = resolveSendableOutboundReplyParts(normalizedDeliveryPayload);
       if (!reply.hasMedia && !reply.text.trim()) {

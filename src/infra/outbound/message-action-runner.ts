@@ -501,7 +501,18 @@ async function handleInternalSourceReplySendAction(
 }
 
 export async function runMessageAction(input: MessageActionInput): Promise<MessageActionResult> {
-  return withMessageActionEffectAuthority(input, () => runMessageActionWithAuthority(input));
+  const capturedInput: MessageActionInput =
+    input.cfg.messages?.outboundTextSuffix && !input.textAuthor
+      ? {
+          ...input,
+          textAuthor: input.agentId
+            ? { kind: "agent", agentId: input.agentId }
+            : { kind: "system" },
+        }
+      : input;
+  return withMessageActionEffectAuthority(capturedInput, () =>
+    runMessageActionWithAuthority(capturedInput),
+  );
 }
 
 async function runMessageActionWithAuthority(

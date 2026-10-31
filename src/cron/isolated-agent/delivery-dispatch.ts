@@ -214,7 +214,6 @@ export async function dispatchCronDelivery(
     if (payloadNormalization.kind === "suppress") {
       return finishSilentReplyDelivery(payloadNormalization.reason);
     }
-    const normalizedPayloads = payloadNormalization.payload;
     const deliveryIdempotencyKey = buildDirectCronDeliveryIdempotencyKey({
       jobId: params.job.id,
       runStartedAt: params.runStartedAt,
@@ -262,7 +261,7 @@ export async function dispatchCronDelivery(
       const payloadsForDelivery = (
         await maybeApplyTtsToCronPayloads({
           cfg: params.cfgWithAgentDefaults,
-          payloads: normalizedPayloads,
+          payloads: payloadNormalization.payload,
           delivery,
           agentId: params.agentId,
           ttsAuto: params.ttsAuto,
@@ -355,6 +354,7 @@ export async function dispatchCronDelivery(
             accountId: delivery.accountId,
             threadId: delivery.threadId,
             payloads: linkedPayloadsForDelivery,
+            textAuthor: { kind: "agent", agentId: params.agentId },
             session: deliverySession,
             identity,
             bestEffort: params.deliveryBestEffort,
@@ -704,9 +704,8 @@ export async function dispatchCronDelivery(
       return buildDeliveryState({ kind: "suppressed" });
     }
 
-    // Finalize descendant/subagent output first for text-only cron runs, then
-    // send through the real outbound adapter so delivered=true always reflects
-    // an actual channel send instead of internal announce routing.
+    // Finalize descendant output, then use the outbound adapter so delivered=true
+    // reflects a channel send instead of internal announce routing.
     const useDirectDelivery =
       !requiresSessionCompletion &&
       (params.deliveryPayloadHasStructuredContent ||

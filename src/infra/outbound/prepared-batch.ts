@@ -29,6 +29,9 @@ export type PreparedOutboundBatch = {
   sourcePayloadCount: number;
   /** True only when accepted payloads already passed post-policy channel normalization. */
   channelNormalized?: true;
+  textPreparation?: import("./text-suffix.types.js").OutboundTextPreparation;
+  /** Effective formatter settings captured once for deterministic prepared-intent replay. */
+  formatting?: import("./formatting.js").OutboundDeliveryFormattingOptions;
   runId?: string;
   executionIdentityToken?: ExecutionIdentityAdmissionToken;
   entries: PreparedOutboundBatchEntry[];

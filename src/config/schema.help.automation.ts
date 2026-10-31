@@ -264,6 +264,24 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Message infrastructure and cross-agent defaults. Root siblings own infrastructure and cross-agent defaults; agents.defaults owns agent-loop behavior; agent entries may override either where supported.",
   "messages.visibleReplies":
     'Controls model-authored source replies across direct, group, and channel conversations. "message_tool" requires message(action=send) for normal assistant output and generic tool media; explicitly host-owned runtime output remains deliverable except for ambient room events. "automatic" posts normal replies as before.',
+  "messages.outboundTextSuffix":
+    "Optional literal signature scoped to an admitted agent and exact direct outgoing routes. Disabled by default; only adopting channels apply it to physical text/captions.",
+  "messages.outboundTextSuffix.enabled":
+    "Enable the exact scoped outgoing text suffix for newly admitted deliveries. Existing prepared intents retain their captured policy.",
+  "messages.outboundTextSuffix.text":
+    "Single-line literal suffix, at most 32 Unicode scalars / 128 UTF-8 bytes, without controls or Markdown delimiters.",
+  "messages.outboundTextSuffix.agentId":
+    "Canonical admitted publishing agent required for this rule; session/display names do not establish authorship.",
+  "messages.outboundTextSuffix.targets":
+    "Finite unique exact channel/account/direct-peer bindings. Weixin peer identifiers remain case-sensitive; WhatsApp uses trusted PN/LID equivalence.",
+  "messages.outboundTextSuffix.targets[].channel":
+    "Adopting transport: whatsapp or openclaw-weixin.",
+  "messages.outboundTextSuffix.targets[].accountId":
+    "Exact canonical sending account; no wildcard or fallback-to-all accounts.",
+  "messages.outboundTextSuffix.targets[].peer.kind":
+    "Only direct recipients are supported. Group/channel/broadcast delivery is excluded.",
+  "messages.outboundTextSuffix.targets[].peer.id":
+    "Exact canonical direct recipient identifier; use a WhatsApp E.164/PN binding or the case-sensitive Weixin peer ID.",
   "messages.usageTemplate":
     "Custom /usage full footer template, either an inline object or a JSON file path. Invalid or unavailable templates fall back to the built-in usage line.",
   "messages.responseUsage":

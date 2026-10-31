@@ -326,6 +326,9 @@ async function routeReplyOperation(
       ...(inferredReplyTarget ? { replyToMode: replyDelivery?.replyToMode ?? "all" } : {}),
       threadId: resolvedThreadId,
       session: outboundSession,
+      ...(params.agentId
+        ? { textAuthor: { kind: "agent" as const, agentId: params.agentId } }
+        : {}),
       signal: abortSignal,
       onPlatformSendDispatch: params.beforeDeliver,
       assertDirectAdapterHandoff: params.assertCurrent,

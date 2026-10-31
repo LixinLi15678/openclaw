@@ -1,4 +1,3 @@
-// Resolves outbound channel adapters and executes their send lifecycle.
 import type {
   ChannelMessageAdapterShape,
   ChannelMessageSendAttemptContext,
@@ -37,6 +36,8 @@ import {
   type OutboundDeliveryCommitHook,
 } from "./delivery-commit-hooks.js";
 import type { OutboundMessageSendOverrides } from "./message-plan.js";
+// Resolves outbound channel adapters and executes their send lifecycle.
+import { outboundTextSuffixRuntime, recordTextSuffixCoverage } from "./text-suffix.js";
 
 const log = createSubsystemLogger("outbound/deliver");
 
@@ -189,7 +190,22 @@ function createPluginHandler(
   if (!messageText && !outbound?.sendText) {
     return null;
   }
+  if (
+    params.textPreparation?.suffix.decision === "scoped" &&
+    outbound?.outboundTextSuffix !== "suffix-v1"
+  ) {
+    recordTextSuffixCoverage("unsupported_channel");
+  }
+  const suffixContext =
+    outbound?.outboundTextSuffix === "suffix-v1" && params.textPreparation
+      ? {
+          textPreparation: params.textPreparation,
+          textFormatting: params.textFormatting,
+          outboundTextSuffix: outboundTextSuffixRuntime,
+        }
+      : {};
   const baseCtx = {
+    ...suffixContext,
     cfg: params.cfg,
     to: params.to,
     accountId: params.accountId,

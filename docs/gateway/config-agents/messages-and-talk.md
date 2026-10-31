@@ -55,6 +55,63 @@ Resolution (most specific wins): account → channel → global. `""` disables a
 
 Variables are case-insensitive. `{think}` is an alias for `{thinkingLevel}`.
 
+### Scoped outgoing text suffix
+
+`messages.outboundTextSuffix` is disabled when absent or when `enabled` is false.
+It applies one literal suffix to each visible physical text/caption only when the
+admitted publishing agent and the resolved channel/account/direct recipient all
+match. It does not use prompts, display names, session-key guesses, or inbound
+allowlists to identify the author or recipient.
+
+```json5
+{
+  messages: {
+    outboundTextSuffix: {
+      enabled: false,
+      text: "🌙",
+      agentId: "main",
+      targets: [
+        { channel: "whatsapp", accountId: "default", peer: { kind: "direct", id: "+15555550123" } },
+        {
+          channel: "openclaw-weixin",
+          accountId: "example-bot",
+          peer: { kind: "direct", id: "ExamplePeer@im.wechat" },
+        },
+      ],
+    },
+  },
+}
+```
+
+Targets are finite, unique exact bindings; wildcard/regex scopes and group targets
+are rejected. Agent/account keys use their normal canonical form. Weixin peer IDs
+remain case-sensitive. WhatsApp uses the active listener's actual PN/LID route and
+its existing trusted equivalence mapping. Missing author, route, or channel V1
+adoption leaves the delivery unchanged. Only adopting WhatsApp/Weixin versions
+support this policy; equal product versions do not establish support.
+
+The literal is single-line, nonblank, at most 32 Unicode scalars / 128 UTF-8 bytes,
+and cannot contain controls, bidi overrides, or Markdown delimiters. A terminal
+prose `🌙` run (including presentation variation selectors) normalizes to one
+canonical `🌙`. The signature follows closed formatting. Code values, links,
+images and table data retain literal moons. Each chunk includes its own suffix
+within the channel's local UTF-16 limit, including formatting closure/framing.
+An indivisible grapheme, link, table or reference-dependent document that cannot
+fit fails preparation before provider dispatch; the planner does not truncate or
+reflow opaque data. These local limits are not provider hard-limit guarantees.
+
+Whitespace-only text and media-only/spoken-text-only payloads do not gain text.
+Other agents, groups, other recipients/accounts, structured tool progress/results,
+reactions, binary data, filenames and URLs are unchanged. Existing control-message
+visibility rules stay with their producers; a structured literal message is not
+reinterpreted as a control directive.
+
+New prepared delivery intents capture the policy and effective formatter. Retries
+reuse finalized requests. Changing or disabling the rule affects new admissions;
+already prepared intents keep their captured facts, while legacy rows without a
+snapshot retain their previous behavior. Accepted parts are never blindly replayed.
+See [the plugin V1 contract](/plugins/sdk-runtime/channel#outgoing-text-suffix-v1).
+
 ### Ack reaction
 
 - Defaults to active agent's `identity.emoji`, otherwise `"👀"`. Set `""` to disable.

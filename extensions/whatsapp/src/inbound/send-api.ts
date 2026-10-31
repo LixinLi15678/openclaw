@@ -93,6 +93,7 @@ export function createWebSendApi(params: {
   };
 
   return {
+    resolveOutboundJid,
     sendMessage: async (
       to: string,
       text: string,
@@ -152,10 +153,25 @@ export function createWebSendApi(params: {
       const kind = mediaBuffer ? "media" : "text";
       const accountId = sendOptions?.accountId ?? params.defaultAccountId;
       return await runAcceptedSend(kind, accountId, async (capture) => {
-        const sendPayload = async (content: AnyMessageContent) =>
-          quotedOpts
+        const sendPayload = async (content: AnyMessageContent) => {
+          await sendOptions?.onPlatformSendDispatch?.();
+          sendOptions?.signal?.throwIfAborted();
+          sendOptions?.assertDirectAdapterHandoff?.();
+          if (
+            sendOptions?.signal ||
+            sendOptions?.onPlatformSendDispatch ||
+            sendOptions?.assertDirectAdapterHandoff
+          ) {
+            return await params.sock.sendMessage(jid, content, quotedOpts, {
+              signal: sendOptions.signal,
+              onPlatformSendDispatch: sendOptions.onPlatformSendDispatch,
+              assertDirectAdapterHandoff: sendOptions.assertDirectAdapterHandoff,
+            });
+          }
+          return quotedOpts
             ? await params.sock.sendMessage(jid, content, quotedOpts)
             : await params.sock.sendMessage(jid, content);
+        };
         capture(await sendPayload(payload), kind);
         if (shouldSendAudioText) {
           const resolvedAudioText = await resolveMentions(jid, text);

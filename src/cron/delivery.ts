@@ -156,6 +156,7 @@ export async function sendCronAnnouncePayloadStrict(params: {
     accountId: delivery.resolvedTarget.accountId,
     threadId: delivery.resolvedTarget.threadId,
     payloads: [params.payload],
+    ...(params.agentId ? { textAuthor: { kind: "agent" as const, agentId: params.agentId } } : {}),
     session: delivery.session,
     identity: delivery.identity,
     bestEffort: false,

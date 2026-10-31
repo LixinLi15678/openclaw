@@ -271,6 +271,7 @@ export async function executeSendAction(params: SendActionParams): Promise<{
     content: message,
     ...(corePayload ? { payloads: [corePayload] } : {}),
     agentId: params.ctx.agentId,
+    textAuthor: params.ctx.input.textAuthor,
     requesterSessionKey: params.ctx.input.sessionKey,
     requesterAccountId: params.ctx.input.requesterAccountId ?? params.ctx.accountId ?? undefined,
     requesterSenderId: params.ctx.input.requesterSenderId ?? undefined,

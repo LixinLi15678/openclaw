@@ -1,5 +1,6 @@
 /** Stable feature names advertised in Gateway hello responses. */
 export const GATEWAY_SERVER_CAPS = {
+  OUTBOUND_TEXT_SUFFIX_V1: "outbound-text-suffix-v1",
   BOARD_WIDGET_PUT_CANVAS_DOC: "board-widget-put-canvas-doc",
   CHAT_SEND_ROUTING_CONTRACT: "chat-send-routing-contract",
   CONTROL_UI_BROWSER_FOCUS: "control-ui-browser-focus",

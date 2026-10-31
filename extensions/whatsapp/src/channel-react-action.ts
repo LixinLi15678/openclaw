@@ -1,5 +1,6 @@
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import { jsonResult } from "openclaw/plugin-sdk/channel-actions";
+import type { OutboundTextSuffixContext } from "openclaw/plugin-sdk/channel-contract";
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "openclaw/plugin-sdk/media-runtime";
 import {
   isWhatsAppGroupJid,
@@ -17,7 +18,9 @@ import {
 
 const WHATSAPP_CHANNEL = "whatsapp" as const;
 
-type WhatsAppMessageActionParams = {
+type WhatsAppMessageActionParams = OutboundTextSuffixContext & {
+  onPlatformSendDispatch?: () => Promise<void>;
+  assertDirectAdapterHandoff?: () => void;
   action: string;
   params: Record<string, unknown>;
   cfg: OpenClawConfig;
@@ -162,6 +165,15 @@ async function handleWhatsAppUploadFileAction(params: WhatsAppMessageActionParam
       readBooleanParam(params.params, "asDocument") ??
       undefined,
     accountId: resolved.accountId,
+    ...(params.textPreparation && params.outboundTextSuffix
+      ? { textPreparation: params.textPreparation, outboundTextSuffix: params.outboundTextSuffix }
+      : {}),
+    ...(params.onPlatformSendDispatch
+      ? { onPlatformSendDispatch: params.onPlatformSendDispatch }
+      : {}),
+    ...(params.assertDirectAdapterHandoff
+      ? { assertDirectAdapterHandoff: params.assertDirectAdapterHandoff }
+      : {}),
   });
   return jsonResult({
     ok: true,

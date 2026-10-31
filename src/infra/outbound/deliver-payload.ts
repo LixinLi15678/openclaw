@@ -190,6 +190,10 @@ export function resolveChannelHandlerParams(
     replyToId: reply?.replyToId,
     replyToMode: reply?.source === "implicit" ? reply.mode : undefined,
     formatting: params.formatting,
+    textFormatting: params.preparedBatch?.formatting,
+    textPreparation: params.preparedBatch
+      ? params.preparedBatch.textPreparation
+      : params.textPreparation,
     threadId: params.threadId,
     identity: params.identity,
     gifPlayback: params.gifPlayback,

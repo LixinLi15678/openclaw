@@ -183,6 +183,23 @@ describe("routeReply", () => {
     setActivePluginRegistry(createTestRegistry());
   });
 
+  it.each(["final", "block"] as const)(
+    "carries only an explicit publishing author for %s replies",
+    async (replyKind) => {
+      for (const agentId of ["main", undefined]) {
+        await routeTestReply({
+          payload: { text: "fixture reply" },
+          channel: "telegram",
+          to: "15550001111",
+          replyKind,
+          sessionKey: "agent:main:telegram:direct:fixture-peer",
+          ...(agentId ? { agentId } : {}),
+        });
+        expect(lastDelivery().textAuthor).toEqual(agentId ? { kind: "agent", agentId } : undefined);
+      }
+    },
+  );
+
   it.each([
     { channel: "slack", aborted: true, error: "Reply routing aborted" },
     {

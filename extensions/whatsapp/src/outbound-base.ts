@@ -80,6 +80,14 @@ const dispatchMessage = async (
     replyToIdSource: params.replyToIdSource,
     replyToMode: params.replyToMode,
     formatting: params.formatting,
+    ...(params.textFormatting ? { textFormatting: params.textFormatting } : {}),
+    ...(params.textPreparation && params.outboundTextSuffix
+      ? { textPreparation: params.textPreparation, outboundTextSuffix: params.outboundTextSuffix }
+      : {}),
+    ...(params.signal ? { signal: params.signal } : {}),
+    ...(params.assertDirectAdapterHandoff
+      ? { assertDirectAdapterHandoff: params.assertDirectAdapterHandoff }
+      : {}),
     onPlatformSendDispatch: params.onPlatformSendDispatch,
     ...(quotedMessageKey ? { quotedMessageKey } : {}),
     ...(onDeliveryResult
@@ -94,6 +102,7 @@ const dispatchMessage = async (
 
 const outbound = {
   deliveryMode: "gateway",
+  outboundTextSuffix: "suffix-v1",
   textChunkLimit: 4000,
   sanitizeText: ({ text }) => normalizeText(text),
   deliveryCapabilities: {

@@ -1,10 +1,4 @@
-import {
-  WAMessageStubType,
-  type AnyMessageContent,
-  type MiscMessageGenerationOptions,
-  type WAMessage,
-  type WASocket,
-} from "baileys";
+import { WAMessageStubType, type WAMessage, type WASocket } from "baileys";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import { resolveInboundDebounceMs } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
@@ -251,25 +245,31 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
         logWhatsAppVerbose(options.verbose, `Presence update failed: ${String(err)}`);
       }
     };
-    const reply = async (text: string, optionsResult?: MiscMessageGenerationOptions) => {
+    const reply: WebInboundCallbackMessage["platform"]["reply"] = async (
+      text,
+      optionsResult,
+      authority,
+    ) => {
       const resolved = await groupMetadata.resolveOutboundMentions(chatJid, text);
-      const result = await sendTrackedMessage(
-        chatJid,
-        addWhatsAppOutboundMentionsToContent({ text: resolved.text }, resolved.mentionedJids),
-        optionsResult,
+      const content = addWhatsAppOutboundMentionsToContent(
+        { text: resolved.text },
+        resolved.mentionedJids,
       );
+      const result = authority
+        ? await sendTrackedMessage(chatJid, content, optionsResult, authority)
+        : await sendTrackedMessage(chatJid, content, optionsResult);
       return normalizeWhatsAppSendResult(result, "text");
     };
-    const sendMedia = async (
-      payload: AnyMessageContent,
-      optionsValue?: MiscMessageGenerationOptions,
+    const sendMedia: WebInboundCallbackMessage["platform"]["sendMedia"] = async (
+      payload,
+      optionsValue,
+      authority,
     ) => {
       const previewPayload = await addWhatsAppImagePreviewFields(payload);
-      const result = await sendTrackedMessage(
-        chatJid,
-        await groupMetadata.applyOutboundMentions(chatJid, previewPayload),
-        optionsValue,
-      );
+      const content = await groupMetadata.applyOutboundMentions(chatJid, previewPayload);
+      const result = authority
+        ? await sendTrackedMessage(chatJid, content, optionsValue, authority)
+        : await sendTrackedMessage(chatJid, content, optionsValue);
       return normalizeWhatsAppSendResult(result, "media");
     };
     const timestamp = inbound.messageTimestampMs;
@@ -331,6 +331,7 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
       },
       platform: {
         chatJid: inbound.remoteJid,
+        resolveEquivalentDirectChatJids: resolveReactionTargetJids,
         recipientJid: self.e164 ?? "me",
         pushName: senderName,
         sender: resolveComparableIdentity({

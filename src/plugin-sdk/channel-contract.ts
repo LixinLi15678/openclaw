@@ -1,5 +1,16 @@
 // Pure channel contract types used by plugin implementations and tests.
 export type {
+  OutboundTextAuthor,
+  DirectTextRoute,
+  CapturedTextSuffix,
+  OutboundTextPreparation,
+  BoundTextSuffix,
+  FinalizedVisibleText,
+  PhysicalVisibleText,
+  OutboundTextSuffixRuntimeV1,
+  OutboundTextSuffixContext,
+} from "../infra/outbound/text-suffix.types.js";
+export type {
   BaseProbeResult,
   BaseTokenResolution,
   ChannelAgentTool,

@@ -383,6 +383,7 @@ describe("deliverAgentCommandResult payload normalization", () => {
     expect(normalizedInput?.mediaUrls).toStrictEqual(["./out/photo.png"]);
     expect(deliverOutboundPayloadsMock).toHaveBeenCalledTimes(1);
     const deliverArgs = latestOutboundDeliveryArgs();
+    expect(deliverArgs.textAuthor).toEqual({ kind: "agent", agentId: "tester" });
     expect(requirePayload(deliverArgs.payloads, 0).isStatusNotice).toBe(true);
     expect(deliverArgs.replyPayloadSendingHook).toEqual({
       kind: "final",

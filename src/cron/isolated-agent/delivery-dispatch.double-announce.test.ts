@@ -418,6 +418,10 @@ describe("dispatchCronDelivery", () => {
     });
     expect(state.delivered).not.toBe(true);
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(deliverOutboundPayloads).mock.calls[0]?.[0].textAuthor).toEqual({
+      kind: "agent",
+      agentId: "main",
+    });
   });
 
   it("records text emptied by TTS as a delivery failure", async () => {

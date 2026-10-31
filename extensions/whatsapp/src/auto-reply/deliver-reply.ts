@@ -1,3 +1,4 @@
+import type { OutboundTextSuffixContext } from "openclaw/plugin-sdk/channel-contract";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createMessageReceiptFromOutboundResults,
@@ -34,7 +35,8 @@ import { sendWhatsAppOutboundWithRetry } from "../outbound-retry.js";
 import { buildQuotedMessageOptions, lookupInboundMessageMeta } from "../quoted-message.js";
 import { newConnectionId } from "../reconnect.js";
 import { formatError } from "../session.js";
-import { markdownToWhatsAppChunks } from "../targets-runtime.js";
+import { markdownToWhatsAppChunks, markdownToWhatsAppSuffixChunks } from "../targets-runtime.js";
+import { bindWhatsAppTextSuffix } from "../text-suffix.js";
 import { whatsappOutboundLog } from "./loggers.js";
 import { elide } from "./util.js";
 
@@ -55,6 +57,7 @@ export function createWhatsAppReplyTransportContext(msg: AdmittedWebInboundMessa
     conversationId: admission.conversation.id,
     conversationKind: admission.conversation.kind,
     chatJid: msg.platform.chatJid,
+    resolveEquivalentDirectChatJids: msg.platform.resolveEquivalentDirectChatJids,
     senderJid: msg.platform.senderJid,
     recipientJid: msg.platform.recipientJid,
     correlationId: msg.event.id,
@@ -103,7 +106,10 @@ function createWhatsAppReplyDeliveryReceipt(
   });
 }
 
-type WhatsAppReplyDeliveryParams = {
+type WhatsAppReplyDeliveryParams = OutboundTextSuffixContext & {
+  signal?: AbortSignal;
+  onPlatformSendDispatch?: () => Promise<void>;
+  assertDirectAdapterHandoff?: () => void;
   replyResult: ReplyPayload;
   normalizedReplyResult?: DeliverableWhatsAppOutboundPayload<ReplyPayload>;
   transport: WhatsAppReplyTransportContext;
@@ -126,8 +132,7 @@ export async function deliverWebReply(params: WhatsAppReplyDeliveryParams) {
 }
 
 async function deliverWebReplyInActivityScope(params: WhatsAppReplyDeliveryParams) {
-  const { replyResult, transport, maxMediaBytes, textLimit, replyLogger, connectionId, skipLog } =
-    params;
+  const { replyResult, transport, maxMediaBytes, replyLogger, connectionId, skipLog } = params;
   const conversationId = transport.conversationId;
   const isGroupConversation = transport.conversationKind === "group";
   const replyStarted = Date.now();
@@ -193,18 +198,53 @@ async function deliverWebReplyInActivityScope(params: WhatsAppReplyDeliveryParam
     whatsappOutboundLog.debug(`Suppressed reasoning payload to ${conversationId}`);
     return finishDelivery();
   }
-  const tableMode = params.tableMode ?? "code";
-  const chunkMode = params.chunkMode ?? "length";
   const normalizedReply =
     params.normalizedReplyResult ??
     normalizeWhatsAppOutboundPayload(replyResult, {
       normalizeText: normalizeWhatsAppPayloadTextPreservingIndentation,
     });
   const text = normalizedReply.text ?? "";
-  const textChunks = resolveTextChunksWithFallback(
-    text,
-    markdownToWhatsAppChunks(text, textLimit, tableMode, chunkMode),
-  );
+  const suffix =
+    transport.conversationKind === "direct"
+      ? bindWhatsAppTextSuffix({
+          ...params,
+          accountId: transport.accountId,
+          jid: transport.chatJid,
+          equivalentJids: await transport.resolveEquivalentDirectChatJids?.(transport.chatJid),
+        })
+      : undefined;
+  const formatting = suffix ? params.textFormatting : undefined;
+  const textLimit = suffix
+    ? Math.min(formatting?.textLimit ?? params.textLimit, 4_096)
+    : params.textLimit;
+  const tableMode = formatting?.tableMode ?? params.tableMode ?? "code";
+  const chunkMode = formatting?.chunkMode ?? params.chunkMode ?? "length";
+  const planText = (value: string) =>
+    suffix &&
+    params.outboundTextSuffix &&
+    (params.textPreparation?.visibility === "visible" ||
+      !/^(?:NO_REPLY|HEARTBEAT_OK)$/u.test(value.trim()))
+      ? markdownToWhatsAppSuffixChunks({
+          text: value,
+          limit: textLimit,
+          tableMode,
+          chunkMode,
+          suffix,
+          runtime: params.outboundTextSuffix,
+        })
+      : resolveTextChunksWithFallback(
+          value,
+          markdownToWhatsAppChunks(value, textLimit, tableMode, chunkMode),
+        );
+  const textChunks = planText(text);
+  const sendAuthority =
+    suffix && (params.signal || params.onPlatformSendDispatch || params.assertDirectAdapterHandoff)
+      ? {
+          signal: params.signal,
+          onPlatformSendDispatch: params.onPlatformSendDispatch,
+          assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
+        }
+      : undefined;
   const mediaList = normalizedReply.mediaUrls ?? [];
 
   const getQuote = () => {
@@ -237,7 +277,15 @@ async function deliverWebReplyInActivityScope(params: WhatsAppReplyDeliveryParam
   ) => {
     try {
       return await sendWhatsAppOutboundWithRetry({
-        send: fn,
+        send: async () => {
+          params.signal?.throwIfAborted();
+          if (suffix) {
+            await params.onPlatformSendDispatch?.();
+            params.signal?.throwIfAborted();
+            params.assertDirectAdapterHandoff?.();
+          }
+          return fn();
+        },
         onRetry: ({ attempt, maxAttempts: retryMaxAttempts, backoffMs, errorText }) => {
           logVerbose(
             `Retrying ${label} to ${conversationId} after failure (${attempt}/${retryMaxAttempts - 1}) in ${backoffMs}ms: ${errorText}`,
@@ -256,7 +304,16 @@ async function deliverWebReplyInActivityScope(params: WhatsAppReplyDeliveryParam
   };
 
   const sendText = async (chunk: string, label: string, quote = getQuote) => {
-    rememberSendResult(await sendWithRetry(() => transport.reply(chunk, quote()), label, "text"));
+    rememberSendResult(
+      await sendWithRetry(
+        () =>
+          sendAuthority
+            ? transport.reply(chunk, quote(), sendAuthority)
+            : transport.reply(chunk, quote()),
+        label,
+        "text",
+      ),
+    );
   };
 
   if (mediaList.length === 0 && textChunks.length) {
@@ -323,7 +380,14 @@ async function deliverWebReplyInActivityScope(params: WhatsAppReplyDeliveryParam
               : { document: media.buffer, fileName: media.fileName, caption };
       rememberSendResult(
         await sendWithRetry(
-          () => transport.sendMedia({ ...mediaContent, mimetype: media.mimetype }, quote),
+          () =>
+            sendAuthority
+              ? transport.sendMedia(
+                  { ...mediaContent, mimetype: media.mimetype },
+                  quote,
+                  sendAuthority,
+                )
+              : transport.sendMedia({ ...mediaContent, mimetype: media.mimetype }, quote),
           `media:${media.kind}`,
           "media",
           mediaUrl,
@@ -362,14 +426,38 @@ async function deliverWebReplyInActivityScope(params: WhatsAppReplyDeliveryParam
       replyLogger.warn({ err: error, mediaUrl }, "failed to send web media reply");
       // A failed trailing attachment needs its own warning after earlier accepted media.
       const fallbackText = isFirst
-        ? [caption ?? "", "⚠️ Media failed."].filter(Boolean).join("\n")
+        ? [suffix ? text : (caption ?? ""), "⚠️ Media failed."].filter(Boolean).join("\n")
         : "⚠️ Media unavailable.";
       whatsappOutboundLog.warn(
         isFirst
           ? `Media skipped; sent text-only to ${conversationId}`
           : `Trailing media failed; sent warning to ${conversationId}`,
       );
-      await sendText(fallbackText, isFirst ? "media:fallback-text" : "media:fallback-unavailable");
+      if (suffix) {
+        if (isFirst) {
+          remainingText.length = 0;
+        }
+        const warnings =
+          isFirst && params.outboundTextSuffix
+            ? markdownToWhatsAppSuffixChunks({
+                text,
+                appendPlainText: "⚠️ Media failed.",
+                limit: textLimit,
+                tableMode,
+                chunkMode,
+                suffix,
+                runtime: params.outboundTextSuffix,
+              })
+            : planText(fallbackText);
+        for (const warning of warnings) {
+          await sendText(warning, isFirst ? "media:fallback-text" : "media:fallback-unavailable");
+        }
+      } else {
+        await sendText(
+          fallbackText,
+          isFirst ? "media:fallback-text" : "media:fallback-unavailable",
+        );
+      }
     },
   });
 

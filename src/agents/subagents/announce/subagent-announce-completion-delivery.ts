@@ -439,6 +439,9 @@ export async function deliverCompletionDirect(params: {
       threadId: params.deliveryTarget.threadId,
       requesterSessionKey: params.requesterSessionKey,
       agentId,
+      ...(params.requesterAgentId === agentId
+        ? { textAuthor: { kind: "agent" as const, agentId } }
+        : {}),
       conversationType: "direct",
       content: content ?? "",
       ...(mediaUrls.length > 0 ? { mediaUrls } : {}),

@@ -31,6 +31,7 @@ import type {
 import type { MessagePollResult, MessageSendResult } from "./message.js";
 import type { OutboundMirror } from "./mirror.js";
 import type { ResolvedMessagingTarget } from "./target-resolver.js";
+import { outboundTextSuffixRuntime } from "./text-suffix.js";
 
 export type MessageActionGateway = Omit<
   OutboundMessageGatewayOptionsInput,
@@ -94,6 +95,8 @@ export type MessageActionInput = Pick<
   /** @internal Durable session key for source-reply transcript and receipt state. */
   sourceReplySessionKey?: string;
   agentId?: string;
+  /** Admitted author captured before derived routing identities or broadcast fanout. */
+  textAuthor?: import("./text-suffix.types.js").OutboundTextAuthor;
   /** Caller owns durable outbound context and must avoid the generic delivery mirror. */
   suppressTranscriptMirror?: boolean;
   /** @internal Explicit durable transcript destination owned by the caller. */
@@ -282,6 +285,17 @@ export function createChannelActionContext(params: {
 }): ChannelMessageActionContext {
   const mediaAccess = params.mediaAccess ?? params.ctx.mediaAccess;
   return {
+    ...(params.ctx.cfg.messages?.outboundTextSuffix &&
+    params.ctx.input.textAuthor &&
+    params.ctx.channelPlugin?.outbound?.outboundTextSuffix === "suffix-v1"
+      ? {
+          textPreparation: {
+            suffix: outboundTextSuffixRuntime.capture(params.ctx.cfg, params.ctx.input.textAuthor),
+            modifiersPrepared: false,
+          },
+          outboundTextSuffix: outboundTextSuffixRuntime,
+        }
+      : {}),
     channel: params.ctx.channel,
     action: params.action,
     cfg: params.ctx.cfg,

@@ -127,6 +127,8 @@ type ChannelOutboundNormalizePayloadBatchParams = Omit<
 
 export type ChannelOutboundAdapter = {
   deliveryMode: "direct" | "gateway" | "hybrid";
+  /** Adopted physical text/caption finalization contract. Omission preserves legacy sends. */
+  outboundTextSuffix?: "suffix-v1";
   chunker?: ((text: string, limit: number, ctx?: ChannelOutboundChunkContext) => string[]) | null;
   chunkerMode?: "text" | "markdown";
   chunkedTextFormatting?: OutboundDeliveryFormattingOptions;

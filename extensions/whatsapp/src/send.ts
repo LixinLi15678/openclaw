@@ -36,7 +36,12 @@ import {
   resolveAdditiveWhatsAppMediaUrls,
 } from "./outbound-media-contract.js";
 import type { WhatsAppQuotedMessageKey } from "./quoted-message.js";
-import { markdownToWhatsAppChunks, toWhatsappJid } from "./targets-runtime.js";
+import {
+  markdownToWhatsAppChunks,
+  markdownToWhatsAppSuffixChunks,
+  toWhatsappJid,
+} from "./targets-runtime.js";
+import { bindWhatsAppTextSuffix } from "./text-suffix.js";
 
 const outboundLog = createSubsystemLogger("gateway/channels/whatsapp").child("outbound");
 
@@ -100,7 +105,15 @@ export async function sendMessageWhatsApp(
     }) => Promise<void> | void;
   } & Pick<
     ChannelOutboundContext,
-    "replyToIdSource" | "replyToMode" | "formatting" | "onPlatformSendDispatch"
+    | "replyToIdSource"
+    | "replyToMode"
+    | "formatting"
+    | "onPlatformSendDispatch"
+    | "signal"
+    | "assertDirectAdapterHandoff"
+    | "textPreparation"
+    | "textFormatting"
+    | "outboundTextSuffix"
   >,
 ): Promise<{ messageId: string; toJid: string }> {
   return await sendWhatsAppUploadFile(to, body, options);
@@ -141,24 +154,56 @@ async function sendMessageWhatsAppInActivityScope(
     cfg,
     accountId: resolvedAccountId,
   });
-  const tableMode = resolveMarkdownTableMode({
-    cfg,
-    channel: "whatsapp",
-    accountId: resolvedAccountId,
+  const routeJid =
+    options.textPreparation?.suffix.decision === "scoped" &&
+    active.resolveOutboundJid &&
+    active.accountId === resolvedAccountId
+      ? active.resolveOutboundJid(to)
+      : undefined;
+  const suffix = bindWhatsAppTextSuffix({
+    ...options,
+    accountId: active.accountId,
+    jid: routeJid,
+    equivalentJids:
+      routeJid && active.resolveEquivalentDirectChatJids
+        ? await active.resolveEquivalentDirectChatJids(routeJid)
+        : undefined,
   });
-  const requestedLimit = options.formatting?.textLimit ?? Infinity;
+  const actualTo = suffix && routeJid ? routeJid : to;
+  const formatting = suffix ? (options.textFormatting ?? options.formatting) : options.formatting;
+  const tableMode =
+    (suffix ? formatting?.tableMode : undefined) ??
+    resolveMarkdownTableMode({
+      cfg,
+      channel: "whatsapp",
+      accountId: resolvedAccountId,
+    });
+  const requestedLimit = formatting?.textLimit ?? Infinity;
   const textLimit = Math.min(
     requestedLimit > 0 ? requestedLimit : Infinity,
-    resolveTextChunkLimit(cfg, "whatsapp", resolvedAccountId, { fallbackLimit: 4_000 }),
+    suffix && formatting?.textLimit
+      ? formatting.textLimit
+      : resolveTextChunkLimit(cfg, "whatsapp", resolvedAccountId, { fallbackLimit: 4_000 }),
     4_096,
   );
-  const textChunks = markdownToWhatsAppChunks(
-    text,
-    textLimit,
-    tableMode,
-    options.formatting?.chunkMode ?? resolveChunkMode(cfg, "whatsapp", resolvedAccountId),
-  );
-  text = textChunks.shift() ?? text;
+  const chunkMode = formatting?.chunkMode ?? resolveChunkMode(cfg, "whatsapp", resolvedAccountId);
+  const textSuffixRuntime = options.outboundTextSuffix;
+  const suffixTextActive =
+    suffix &&
+    textSuffixRuntime &&
+    (options.textPreparation?.visibility === "visible" ||
+      !/^(?:NO_REPLY|HEARTBEAT_OK)$/u.test(text.trim()));
+  const textChunks = suffixTextActive
+    ? markdownToWhatsAppSuffixChunks({
+        text,
+        limit: textLimit,
+        tableMode,
+        chunkMode,
+        suffix,
+        runtime: textSuffixRuntime,
+      })
+    : markdownToWhatsAppChunks(text, textLimit, tableMode, chunkMode);
+  text = textChunks.shift() ?? (suffixTextActive ? "" : text);
   if (!text && !hasMedia) {
     return { messageId: "", toJid: jid };
   }
@@ -262,11 +307,21 @@ async function sendMessageWhatsAppInActivityScope(
       // durable dispatch fence and record its actual quote before reporting progress.
       await options.onPlatformSendDispatch?.();
       const replyToId = nextReplyToId();
-      const partOptions = replyToId ? quotedSendOptions : sendOptions;
+      options.signal?.throwIfAborted();
+      options.assertDirectAdapterHandoff?.();
+      const originalPartOptions = replyToId ? quotedSendOptions : sendOptions;
+      const partOptions = suffix
+        ? {
+            ...originalPartOptions,
+            signal: options.signal,
+            assertDirectAdapterHandoff: options.assertDirectAdapterHandoff,
+            onPlatformSendDispatch: options.onPlatformSendDispatch,
+          }
+        : originalPartOptions;
       const accepted = requireWhatsAppAcceptedSendResult(
         partOptions
-          ? await active.sendMessage(to, part, buffer, mime, partOptions)
-          : await active.sendMessage(to, part, buffer, mime),
+          ? await active.sendMessage(actualTo, part, buffer, mime, partOptions)
+          : await active.sendMessage(actualTo, part, buffer, mime),
       );
       acceptedResults.push(accepted);
       const result = {

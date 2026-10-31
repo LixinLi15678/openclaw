@@ -115,6 +115,83 @@ describe("createWhatsAppSocketOperationTimeoutAdapter", () => {
     vi.useRealTimers();
   });
 
+  it.each(["abort", "authority"] as const)(
+    "retains a queued sender's %s fence without entering provider options",
+    async (kind) => {
+      const started = Promise.withResolvers<void>();
+      const response = Promise.withResolvers<WAMessage | undefined>();
+      const sock = {
+        sendMessage: vi.fn().mockImplementationOnce(() => {
+          started.resolve();
+          return response.promise;
+        }),
+        sendPresenceUpdate: vi.fn(async () => undefined),
+      };
+      const adapter = createWhatsAppSocketOperationTimeoutAdapter(sock, 30_000);
+      const first = adapter.sendMessage("15550001111@s.whatsapp.net", { text: "first" });
+      await started.promise;
+      const controller = new AbortController();
+      const refusal = new Error("queued delivery owner closed");
+      let current = true;
+      const second = adapter
+        .sendMessage("15550002222@s.whatsapp.net", { text: "sealed 🌙" }, undefined, {
+          signal: controller.signal,
+          onPlatformSendDispatch: async () => {
+            await Promise.resolve();
+          },
+          assertDirectAdapterHandoff: () => {
+            if (!current) {
+              throw refusal;
+            }
+          },
+        })
+        .catch((error: unknown) => error);
+      current = false;
+      if (kind === "abort") {
+        controller.abort(refusal);
+      }
+      response.resolve(undefined);
+      await first;
+      expect(await second).toBe(refusal);
+      expect(sock.sendMessage).toHaveBeenCalledExactlyOnceWith("15550001111@s.whatsapp.net", {
+        text: "first",
+      });
+    },
+  );
+
+  it("rechecks the caller after awaited effect preparation and before native initiation", async () => {
+    const preparing = Promise.withResolvers<void>();
+    const prepared = Promise.withResolvers<void>();
+    effectGate.prepare = async () => {
+      preparing.resolve();
+      await prepared.promise;
+    };
+    const sock = {
+      sendMessage: vi.fn(async () => undefined),
+      sendPresenceUpdate: vi.fn(async () => undefined),
+    };
+    const adapter = createWhatsAppSocketOperationTimeoutAdapter(sock, 30_000);
+    let current = true;
+    const refusal = new Error("caller closed while effect prepared");
+    const sending = adapter
+      .sendMessage("15550001111@s.whatsapp.net", { text: "sealed 🌙" }, undefined, {
+        onPlatformSendDispatch: async () => {
+          await Promise.resolve();
+        },
+        assertDirectAdapterHandoff: () => {
+          if (!current) {
+            throw refusal;
+          }
+        },
+      })
+      .catch((error: unknown) => error);
+    await preparing.promise;
+    current = false;
+    prepared.resolve();
+    expect(await sending).toBe(refusal);
+    expect(sock.sendMessage).not.toHaveBeenCalled();
+  });
+
   it.each(["message", "presence"] as const)(
     "rechecks the selected socket after %s authority preparation",
     async (operation) => {

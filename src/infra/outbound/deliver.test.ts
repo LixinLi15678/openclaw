@@ -38,6 +38,11 @@ import {
   registerOutboundPreparationMetadataTests,
 } from "./deliver.projection.test-support.js";
 import { registerOutboundQueueAckTests } from "./deliver.queue-ack.test-support.js";
+import {
+  encodeOutboundDeliverySnapshot,
+  decodeOutboundDeliverySnapshot,
+} from "./delivery-queue-projection.js";
+import type { QueuedDelivery } from "./delivery-queue-types.js";
 import { createOutboundPayloadPlan, projectOutboundPayloadPlanForOutbound } from "./payloads.js";
 import { createUnmodifiedPreparedOutboundBatch } from "./prepared-batch.js";
 
@@ -94,7 +99,9 @@ const queueMocks = vi.hoisted(() => ({
     id,
     created: true,
   })),
-  loadPendingDelivery: vi.fn(async () => null),
+  loadPendingDelivery: vi.fn<typeof import("./delivery-queue-storage.js").loadPendingDelivery>(
+    async () => null,
+  ),
   findDeliveryIntentOwner: vi.fn<
     () => Promise<{
       namespace: "prepared" | "preparing" | "migration" | "legacy-preparing" | "legacy";
@@ -789,6 +796,168 @@ describe("deliverOutboundPayloads", () => {
       }),
     ).rejects.toThrow("turn authority closed after awaited handoff");
     expect(messageSendText).not.toHaveBeenCalled();
+  });
+
+  it("reuses a queued suffix policy and effective formatter after live policy/cap changes", async () => {
+    const channel = "openclaw-weixin";
+    const to = "CasePeer@im.wechat";
+    const accountId = "fixture-account";
+    const physical: string[] = [];
+    const adapter = createOutboundTestPlugin({
+      id: channel,
+      outbound: {
+        deliveryMode: "direct",
+        outboundTextSuffix: "suffix-v1",
+        textChunkLimit: 4_000,
+        sendText: async (ctx) => {
+          expect(ctx.formatting).toEqual({ tableMode: "code" });
+          expect(ctx.textFormatting).toEqual({
+            textLimit: 12,
+            tableMode: "code",
+            chunkMode: "length",
+          });
+          const capability = ctx.outboundTextSuffix;
+          const bound = capability?.bind(ctx.textPreparation?.suffix, {
+            channel,
+            accountId,
+            peer: { kind: "direct", id: to },
+          });
+          if (!capability || !bound) {
+            throw new Error("Captured policy was lost during queue replay");
+          }
+          const units = await capability.planPreservedMarkdownText({
+            text: ctx.text,
+            boundSuffix: bound,
+            effectiveLimit: ctx.textFormatting?.textLimit ?? 0,
+            chunkMode: ctx.textFormatting?.chunkMode ?? "newline",
+            planner: "source-markdown-v1",
+          });
+          physical.push(...units.map((unit) => unit.text));
+          return {
+            channel,
+            messageId: "accepted-1",
+            receipt: createMessageReceiptFromOutboundResults({
+              results: units.map((_unit, index) => ({
+                channel,
+                messageId: `accepted-${index + 1}`,
+              })),
+            }),
+          };
+        },
+      },
+    });
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: channel, plugin: adapter, source: "test" }]),
+    );
+    const policy = {
+      enabled: true,
+      text: "🌙",
+      agentId: "main",
+      targets: [
+        {
+          channel: "openclaw-weixin" as const,
+          accountId,
+          peer: { kind: "direct" as const, id: to },
+        },
+      ],
+    };
+    const admitted = await prepareOutboundPayloadBatch({
+      cfg: {
+        channels: { [channel]: { textChunkLimit: 12, chunkMode: "length" } },
+        messages: { outboundTextSuffix: policy },
+      },
+      channel,
+      to,
+      accountId,
+      payloads: [{ text: "alpha beta gamma" }],
+      textAuthor: { kind: "agent", agentId: "main" },
+      formatting: { tableMode: "code" },
+    });
+    const queued: QueuedDelivery = {
+      id: "suffix-replay",
+      enqueuedAt: 0,
+      retryCount: 0,
+      attemptCount: 0,
+      producerClaimId: "mock-producer-claim",
+      channel,
+      to,
+      accountId,
+      preparedBatch: admitted,
+      formatting: { tableMode: "code" },
+    };
+    const restored = decodeOutboundDeliverySnapshot(encodeOutboundDeliverySnapshot(queued));
+    policy.enabled = false;
+    policy.text = "changed";
+    queueMocks.loadPendingDelivery.mockResolvedValue(restored);
+    queueMocks.enqueuePreparedDeliveryOnce.mockImplementation(async (_params, id) => ({
+      id,
+      created: false,
+    }));
+    await deliverOutboundPayloads({
+      cfg: {
+        channels: { [channel]: { textChunkLimit: 100, chunkMode: "newline" } },
+        messages: { outboundTextSuffix: policy },
+      },
+      channel,
+      to,
+      accountId,
+      payloads: [{ text: "new caller text must not replace custody" }],
+      textAuthor: { kind: "agent", agentId: "other" },
+      formatting: { textLimit: 100, tableMode: "bullets", chunkMode: "newline" },
+      deliveryIntentId: queued.id,
+      reusePendingDeliveryIntent: true,
+      queuePolicy: "required",
+    });
+    expect(physical).toEqual(["alpha 🌙", " beta 🌙", " gamma 🌙"]);
+    expect(restored.preparedBatch.textPreparation?.suffix).toMatchObject({
+      decision: "scoped",
+      text: "🌙",
+      authorAgentId: "main",
+    });
+  });
+
+  it("keeps an uncaptured legacy prepared batch unchanged after policy activation", async () => {
+    const channel = "openclaw-weixin";
+    const sendText = vi.fn(
+      async (ctx: Parameters<NonNullable<ChannelOutboundAdapter["sendText"]>>[0]) => {
+        expect(ctx.textPreparation).toBeUndefined();
+        expect(ctx.outboundTextSuffix).toBeUndefined();
+        expect(ctx.textFormatting).toBeUndefined();
+        return { channel, messageId: "accepted-legacy" };
+      },
+    );
+    const plugin = createOutboundTestPlugin({
+      id: channel,
+      outbound: { deliveryMode: "direct", outboundTextSuffix: "suffix-v1", sendText },
+    });
+    setActivePluginRegistry(createTestRegistry([{ pluginId: channel, plugin, source: "test" }]));
+    await deliverOutboundPayloads({
+      cfg: {
+        messages: {
+          outboundTextSuffix: {
+            enabled: true,
+            text: "🌙",
+            agentId: "main",
+            targets: [
+              {
+                channel,
+                accountId: "fixture-account",
+                peer: { kind: "direct", id: "CasePeer@im.wechat" },
+              },
+            ],
+          },
+        },
+      },
+      channel,
+      to: "CasePeer@im.wechat",
+      accountId: "fixture-account",
+      payloads: [{ text: "new caller" }],
+      preparedBatch: createUnmodifiedPreparedOutboundBatch([{ text: "legacy body🌙" }]),
+      textAuthor: { kind: "agent", agentId: "main" },
+      skipQueue: true,
+    });
+    expect(sendText).toHaveBeenCalledOnce();
+    expect(sendText.mock.calls[0]?.[0].text).toBe("legacy body🌙");
   });
 
   it("never falls back to fresh modifiers after another preparation owner wins", async () => {

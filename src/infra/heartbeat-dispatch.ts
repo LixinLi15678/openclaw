@@ -617,6 +617,7 @@ export async function deliverHeartbeatDispatch(
       accountId: delivery.accountId,
       threadId: delivery.threadId,
       payloads: [payload],
+      textAuthor: { kind: "agent", agentId },
       session: buildOutboundSessionContext({
         cfg,
         agentId,

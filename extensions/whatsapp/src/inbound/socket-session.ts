@@ -26,6 +26,7 @@ import {
   resolveWhatsAppSocketOperationTimeoutMs,
   withWhatsAppSocketOperationTimeout,
   type WhatsAppSocketOperationAdapter,
+  type WhatsAppSendAuthority,
   type WhatsAppSocketTimingOptions,
 } from "../socket-timing.js";
 import {
@@ -312,6 +313,7 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
     jid: string,
     content: AnyMessageContent,
     sendOptions?: MiscMessageGenerationOptions,
+    authority?: WhatsAppSendAuthority,
   ) => {
     let lastError: unknown = new Error(RECONNECT_IN_PROGRESS_ERROR);
     for (let attempt = 1; ; attempt += 1) {
@@ -319,11 +321,10 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
       if (currentSock) {
         try {
           await assertCanSendToJid(jid, currentSock, { useVerifiedReady: true });
-          const result = await currentSocketOperations(currentSock).sendMessage(
-            jid,
-            content,
-            sendOptions,
-          );
+          const operations = currentSocketOperations(currentSock);
+          const result = authority
+            ? await operations.sendMessage(jid, content, sendOptions, authority)
+            : await operations.sendMessage(jid, content, sendOptions);
           rememberOutboundMessage(jid, result);
           return result;
         } catch (error) {

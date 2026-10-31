@@ -728,6 +728,9 @@ export async function deliverAgentCommandResult(
           to: deliveryTarget,
           accountId: resolvedAccountId,
           payloads: deliveryPayloads,
+          ...(outboundSession?.agentId
+            ? { textAuthor: { kind: "agent" as const, agentId: outboundSession.agentId } }
+            : {}),
           ...(completion
             ? {
                 deliveryCompletion: completion,

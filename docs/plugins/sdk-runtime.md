@@ -40,6 +40,10 @@ surface and session root. Channels may use this capability to enable helper
 tools for restricted senders. Core remains responsible for authorization and
 containment. The same ID is advertised in Gateway `hello-ok.features.capabilities`.
 
+`outbound-text-suffix-v1` exposes an optional pure, scoped physical text/caption
+finalization contract. See [outgoing text suffix V1](/plugins/sdk-runtime/channel#outgoing-text-suffix-v1).
+It grants no routing or send authority.
+
 ## What each page covers
 
 - [Config and utilities](/plugins/sdk-runtime/config-and-utilities) — runtime config reads and writes, plus the shared process, error, and model-picker utilities.

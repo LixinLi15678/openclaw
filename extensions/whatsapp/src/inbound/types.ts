@@ -7,6 +7,7 @@ import type {
 import type { PollInput } from "openclaw/plugin-sdk/poll-runtime";
 import type { WhatsAppIdentity, WhatsAppReplyContext, WhatsAppSelfIdentity } from "../identity.js";
 import type { WhatsAppQuotedMessageKey } from "../quoted-message.js";
+import type { WhatsAppSendAuthority } from "../socket-timing.js";
 import type { WhatsAppInboundAdmission } from "./admission.js";
 import type { WhatsAppSendResult } from "./send-result.js";
 
@@ -17,6 +18,9 @@ export type WebListenerCloseReason = {
 };
 
 export type ActiveWebSendOptions = {
+  signal?: AbortSignal;
+  assertDirectAdapterHandoff?: () => void;
+  onPlatformSendDispatch?: () => Promise<void>;
   quotedMessageKey?: WhatsAppQuotedMessageKey;
   gifPlayback?: boolean;
   accountId?: string;
@@ -25,6 +29,10 @@ export type ActiveWebSendOptions = {
 };
 
 export type ActiveWebListener = {
+  /** Actual listener account and the listener-owned PN/LID resolver. */
+  accountId?: string;
+  resolveOutboundJid?: (to: string) => string;
+  resolveEquivalentDirectChatJids?: (jid: string) => Promise<string[]>;
   assertSendReady?: (to: string) => Promise<void>;
   sendMessage: (
     to: string,
@@ -104,6 +112,7 @@ type WhatsAppInboundPayload = {
 
 type WhatsAppInboundPlatform = {
   chatJid: string;
+  resolveEquivalentDirectChatJids?: (jid: string) => Promise<string[]>;
   recipientJid: string;
   sender?: WhatsAppIdentity;
   senderJid?: string;
@@ -116,10 +125,15 @@ type WhatsAppInboundPlatform = {
   selfE164?: string | null;
   fromMe?: boolean;
   sendComposing: () => Promise<void>;
-  reply: (text: string, options?: MiscMessageGenerationOptions) => Promise<WhatsAppSendResult>;
+  reply: (
+    text: string,
+    options?: MiscMessageGenerationOptions,
+    authority?: WhatsAppSendAuthority,
+  ) => Promise<WhatsAppSendResult>;
   sendMedia: (
     payload: AnyMessageContent,
     options?: MiscMessageGenerationOptions,
+    authority?: WhatsAppSendAuthority,
   ) => Promise<WhatsAppSendResult>;
 };
 

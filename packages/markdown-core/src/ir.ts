@@ -177,6 +177,7 @@ type TableState = {
 };
 
 type RenderState = RenderTarget & {
+  literalOwnership?: { protectedEnd: number };
   env: RenderEnv;
   headingStyle: "none" | "bold" | "rich";
   blockquotePrefix: string;
@@ -207,6 +208,8 @@ type RenderState = RenderTarget & {
 export type MarkdownParseOptions = {
   /** Mark assistant-authored transcript-role headers after Markdown parsing. */
   assistantTranscriptRoleHeaders?: boolean;
+  /** Opt-in protected literal position for formatter-owned terminal prose edits. */
+  literalOwnership?: boolean;
   linkify?: boolean;
   enableSpoilers?: boolean;
   /** Parse authored HTML <u>/<ins> tags into underline spans. */
@@ -958,6 +961,13 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
       case "text":
         recordTaskMarker(state, token.content ?? "");
         appendText(state, token.content ?? "", token);
+        if (
+          state.literalOwnership &&
+          !state.table &&
+          (token.info === "entity" || token.info === "escape")
+        ) {
+          state.literalOwnership.protectedEnd = state.text.length;
+        }
         break;
       case ASSISTANT_TRANSCRIPT_ROLE_NODE_TYPE: {
         const meta = (token.meta as AssistantTranscriptRoleTokenMeta | undefined)
@@ -994,6 +1004,9 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
           resolveRenderTarget(state),
           meta ?? { text: token.content ?? "", spans: [] },
         );
+        if (state.literalOwnership && !state.table) {
+          state.literalOwnership.protectedEnd = state.text.length;
+        }
         break;
       }
       case "softbreak":
@@ -1165,6 +1178,9 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         break;
       case "table_close":
         renderTable(state);
+        if (state.literalOwnership) {
+          state.literalOwnership.protectedEnd = state.text.length;
+        }
         state.table = null;
         break;
       case "thead_open":
@@ -1331,7 +1347,7 @@ function indexSourceLines(source: string) {
 export function markdownToIRWithMeta(
   markdown: string,
   options: MarkdownParseOptions = {},
-): { ir: MarkdownIR; hasTables: boolean; tables: MarkdownTableMeta[] } {
+): { ir: MarkdownIR; hasTables: boolean; tables: MarkdownTableMeta[]; protectedTextEnd?: number } {
   const source = markdown ?? "";
   const env: RenderEnv = {
     listStack: [],
@@ -1346,6 +1362,7 @@ export function markdownToIRWithMeta(
 
   const state: RenderState = {
     ...initRenderTarget(),
+    ...(options.literalOwnership ? { literalOwnership: { protectedEnd: 0 } } : {}),
     env,
     headingStyle: options.headingStyle ?? "none",
     blockquotePrefix: options.blockquotePrefix ?? "",
@@ -1439,6 +1456,9 @@ export function markdownToIRWithMeta(
   return {
     ir,
     hasTables: state.hasTables,
+    ...(state.literalOwnership
+      ? { protectedTextEnd: Math.min(finalLength, state.literalOwnership.protectedEnd) }
+      : {}),
     tables: state.collectedTables.map((table) =>
       Object.assign(table, {
         placeholderOffset: Math.min(table.placeholderOffset, finalLength),
